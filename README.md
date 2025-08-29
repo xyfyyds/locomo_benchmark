@@ -72,6 +72,20 @@ bash scripts/evaluate_gemini.sh
 bash scripts/evaluate_hf_llm.sh
 ```
 
+* Evaluate local models
+```
+python3 task_eval/evaluate_qa.py \
+    --data-file ./data/locomo10.json --out-file ./outputs/locomo10_qa.json \
+    --model ../models/Qwen/Qwen2.5-3B-Instruct --batch-size 1
+```
+
+1. 更改model与out-put位置，记得提前mkdir outputs，否则没法保存结果
+2. evaluate_qa.py, evaluation.py, hf_llm_utils.py中设置了对model_name的要求，否则NotImplementedError，加入适配自己的模型命名。
+3. 环境基本用verl的就行，额外安装的包包括pip install rouge, pip install nltk, pip install bert_score, pip install anthropic, pip install google-generativeai, 应该包括这些就行，可以看import
+4. 数据./data/locomo10.json中有的题是adversarial_answer没有answer，应该是没有绝对标准答案，这个源代码没做适配，我在evaluate_qa.py, evaluation.py, hf_llm_utils.py里适配了一下
+5. 其他没啥，代码几乎开盖即用，小报错几乎马上能解决
+6. 不建议用use_4bit，好像npu不支持？默认torch.float16
+
 ### Generate observations and session summaries from LoCoMo conversations using `gpt-3.5-turbo` for evaluating RAG-based models
 We provide the observations and summaries with our release of the LoCoMo dataset. Follow these instructions to re-generate the same or for a different set of conversations.
 
@@ -113,3 +127,6 @@ Please cite our paper if you use LoCoMo in your works:
   year={2024}
 }
 ```
+
+
+This is to make me better govern my own project baseline testing, all right reserved by original authors.
