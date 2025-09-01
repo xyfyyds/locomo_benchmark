@@ -10,6 +10,8 @@ import transformers
 import torch
 import huggingface_hub
 
+from task_eval.rag_utils import build_bm25s_index_from_data, bm25s_retrieve_topk
+
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -228,6 +230,15 @@ def get_input_context(data, question_prompt, encoding, args):
 
 def get_hf_answers(in_data, out_data, args, pipeline, model_name):
 
+    # 与 evaluate_qa.py 保持一致，否则统计用不到 RAG 的 key
+    if args.use_rag:
+        prediction_key = f"{args.model}_{args.rag_mode}_top_{args.top_k}_prediction"
+        model_key = f"{args.model}_{args.rag_mode}_top_{args.top_k}"
+    else:
+        prediction_key = f"{args.model}_prediction"
+        model_key = f"{args.model}"
+
+
     if 'mistral' in model_name:
         encoding = AutoTokenizer.from_pretrained(model_name)
     else:
@@ -245,8 +256,14 @@ def get_hf_answers(in_data, out_data, args, pipeline, model_name):
             if i>=len(in_data['qa']):
                 break
             qa = in_data['qa'][i]
-            # skip if already predicted and overwrite is set to False            
-            if '%s_prediction' % args.model not in qa or args.overwrite:
+            # # skip if already predicted and overwrite is set to False
+            # if '%s_prediction' % args.model not in qa or args.overwrite:
+            #     include_idxs.append(i)
+            # else:
+            #     print("Skipping -->", qa['question'])
+            #     continue
+            # # skip if already predicted and overwrite is set to False
+            if (prediction_key not in qa) or args.overwrite:
                 include_idxs.append(i)
             else:
                 print("Skipping -->", qa['question'])
@@ -284,18 +301,34 @@ def get_hf_answers(in_data, out_data, args, pipeline, model_name):
 
         if args.batch_size == 1:
 
+            raw_question = questions[0]
+            q_for_model = raw_question
+            ctx_ids = []
+
+            # 2) RAG：bm25/bm25s 上下文拼接
+            if args.use_rag and args.retriever and args.retriever.lower() in ['bm25', 'bm25s']:
+                method = getattr(args, "bm25_method", "lucene")  # 'lucene'/'bm25+'/'bm25l'/'atire'/'robertson'
+                retr, doc_texts, doc_ids = build_bm25s_index_from_data(in_data['conversation'], method=method)
+                # bm25s: 先 index(tokenize(corpus))，再 retrieve(tokenize(query), k) :contentReference[oaicite:0]{index=0}
+                top_ctx = bm25s_retrieve_topk(retr, raw_question, doc_texts, doc_ids, args.top_k)
+                ctx_ids = [c.get("id", "") for c in top_ctx]
+                ctx_block = "Here are retrieved contexts related to the question: \n{}\n\n".format(
+                    args.top_k, "\n".join(c.get("text", "") for c in top_ctx)
+                ) + "Based on the above context, answer the following question."
+                q_for_model = ctx_block + raw_question
+
             if 'mistral' in model_name:
-                answer = run_mistral(pipeline, questions[0], in_data, encoding, args)
+                answer = run_mistral(pipeline, q_for_model, in_data, encoding, args)
             elif 'llama' in model_name:
-                answer = run_llama(pipeline, questions[0], in_data, encoding, args)
+                answer = run_llama(pipeline, q_for_model, in_data, encoding, args)
             elif 'gemma' in model_name:
-                answer = run_gemma(pipeline, questions[0], in_data, encoding, args)
+                answer = run_gemma(pipeline, q_for_model, in_data, encoding, args)
             elif 'Qwen' in model_name:
-                answer = run_llama(pipeline, questions[0], in_data, encoding, args)
+                answer = run_llama(pipeline, q_for_model, in_data, encoding, args)
             else:
                 raise NotImplementedError
             
-            print(questions[0], answer)
+            print(q_for_model, answer)
 
             # post process answers, necessary for Adversarial Questions
             answer = answer.replace('\\"', "'").strip()
@@ -308,7 +341,9 @@ def get_hf_answers(in_data, out_data, args, pipeline, model_name):
                     answer = cat_5_answers[0]['b']
             else:
                 answer = answer.lower().replace('(a)', '').replace('(b)', '').replace('a)', '').replace('b)', '').replace('answer:', '').strip()
-            out_data['qa'][batch_start_idx]['%s_prediction' % args.model] = answer
+            out_data['qa'][batch_start_idx][prediction_key] = answer
+            if args.use_rag:
+                out_data['qa'][batch_start_idx][prediction_key + "_context"] = ctx_ids
 
         else:            
             raise NotImplementedError

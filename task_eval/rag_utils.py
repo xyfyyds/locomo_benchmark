@@ -8,6 +8,56 @@ import torch
 from tqdm import tqdm
 from global_methods import get_openai_embedding, set_openai_key, run_chatgpt_with_examples
 
+# --- BM25S RAG utilities ---
+import bm25s
+import numpy as np
+
+def _turn_text(dialog: dict, date_time_string: str) -> str:
+    txt = dialog.get('compressed_text', dialog.get('clean_text', dialog.get('text', '')))
+    turn = f'{dialog.get("speaker","Someone")} said, "{txt}"'
+    if dialog.get("img_file") and dialog.get("blip_caption"):
+        turn += f' and shared {dialog["blip_caption"]}.'
+    return f'({date_time_string}) {turn}'
+
+def build_bm25s_index_from_data(conversation: dict, method: str = "lucene", use_english_stopwords: bool = True, use_stemmer: bool = False):
+    doc_texts, doc_ids = [], []
+    session_nums = [int(k.split('_')[-1]) for k in conversation.keys()
+                    if k.startswith('session_') and not k.endswith('_date_time')]
+    for i in sorted(session_nums):
+        dt = conversation.get(f'session_{i}_date_time', '')
+        for dialog in conversation.get(f'session_{i}', []):
+            t = _turn_text(dialog, dt)
+            doc_texts.append(t)
+            doc_ids.append(dialog.get("dia_id", ""))
+
+    stemmer = None
+    if use_stemmer:
+        try:
+            import Stemmer
+            stemmer = Stemmer.Stemmer("english")
+        except Exception:
+            stemmer = None
+
+    stopwords = "en" if use_english_stopwords else []
+    corpus_tokens = bm25s.tokenize(doc_texts, stopwords=stopwords, stemmer=stemmer)
+
+    retriever = bm25s.BM25(method=method)   # defaults to Lucene variant
+    retriever.index(corpus_tokens)          # build sparse index
+    return retriever, doc_texts, doc_ids
+
+def bm25s_retrieve_topk(retriever, query: str, doc_texts, doc_ids, top_k: int,
+                        use_english_stopwords: bool = True, use_stemmer: bool = False):
+    stemmer = None
+    if use_stemmer:
+        try:
+            import Stemmer
+            stemmer = Stemmer.Stemmer("english")
+        except Exception:
+            stemmer = None
+    q_tokens = bm25s.tokenize(query, stopwords=("en" if use_english_stopwords else []), stemmer=stemmer)
+    idxs, scores = retriever.retrieve(q_tokens, k=top_k)
+    idxs, scores = idxs[0], scores[0]
+    return [{"id": doc_ids[i], "text": doc_texts[i], "score": float(scores[j])} for j, i in enumerate(idxs)]
 
 
 def save_eval(data_file, accs, key='exact_match'):
@@ -61,6 +111,9 @@ def init_context_model(retriever):
 
         set_openai_key()
         return None, None
+
+    elif retriever.lower() in ['bm25', 'bm25s']:
+        return None, None
     
     else:
         raise ValueError
@@ -93,6 +146,9 @@ def init_query_model(retriever):
     elif retriever == 'openai':
 
         set_openai_key()
+        return None, None
+
+    elif retriever.lower() in ['bm25', 'bm25s']:
         return None, None
     
     else:
