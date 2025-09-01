@@ -86,7 +86,18 @@ python3 task_eval/evaluate_qa.py \
 5. 其他没啥，代码几乎开盖即用，小报错几乎马上能解决
 6. 不建议用use_4bit，好像npu不支持？默认torch.float16
 
-### Generate observations and session summaries from LoCoMo conversations using `gpt-3.5-turbo` for evaluating RAG-based models
+* Evaluate local models sing RAG bm25
+```
+python3 task_eval/evaluate_qa.py \
+    --data-file ./data/locomo10.json --out-file ./outputs/locomo10_qa.json \
+    --model ../models/Qwen/Qwen2.5-3B-Instruct --batch-size 1 \
+    --use-rag --retriever bm25s  --top-k 5 --rag-mode dialog
+```
+
+1. 可以在hf_llm_utils.py中ctrl + f "Here are retrieved contexts related to the question", 调整RAG的prompt
+2. rag-mode目前只能选dialog 按照gpt rag的实现方法，其他两个好像缺文件，从对话中检索正好也是标准做法
+
+### Gen observations and session summaries from LoCoMo conversations using `gpt-3.5-turbo` for evaluating RAG-based models
 We provide the observations and summaries with our release of the LoCoMo dataset. Follow these instructions to re-generate the same or for a different set of conversations.
 
 * Generate observations from all sessions:

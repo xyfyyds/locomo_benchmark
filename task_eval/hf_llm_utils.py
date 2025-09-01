@@ -307,14 +307,14 @@ def get_hf_answers(in_data, out_data, args, pipeline, model_name):
 
             # 2) RAG：bm25/bm25s 上下文拼接
             if args.use_rag and args.retriever and args.retriever.lower() in ['bm25', 'bm25s']:
-                method = getattr(args, "bm25_method", "lucene")  # 'lucene'/'bm25+'/'bm25l'/'atire'/'robertson'
-                retr, doc_texts, doc_ids = build_bm25s_index_from_data(in_data['conversation'], method=method)
+                mode = getattr(args, "rag_mode", "dialog")  # 'lucene'/'bm25+'/'bm25l'/'atire'/'robertson'
+                retr, doc_texts, doc_ids = build_bm25s_index_from_data(in_data['conversation'], mode=mode)
                 # bm25s: 先 index(tokenize(corpus))，再 retrieve(tokenize(query), k) :contentReference[oaicite:0]{index=0}
                 top_ctx = bm25s_retrieve_topk(retr, raw_question, doc_texts, doc_ids, args.top_k)
                 ctx_ids = [c.get("id", "") for c in top_ctx]
-                ctx_block = "Here are retrieved contexts related to the question: \n{}\n\n".format(
+                ctx_block = "CONTEXT (Top-{}):\n{}\n\n".format(
                     args.top_k, "\n".join(c.get("text", "") for c in top_ctx)
-                ) + "Based on the above context, answer the following question."
+                )
                 q_for_model = ctx_block + raw_question
 
             if 'mistral' in model_name:

@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import time
@@ -12,23 +13,45 @@ from global_methods import get_openai_embedding, set_openai_key, run_chatgpt_wit
 import bm25s
 import numpy as np
 
+
 def _turn_text(dialog: dict, date_time_string: str) -> str:
     txt = dialog.get('compressed_text', dialog.get('clean_text', dialog.get('text', '')))
-    turn = f'{dialog.get("speaker","Someone")} said, "{txt}"'
+    turn = f'{dialog.get("speaker", "Someone")} said, "{txt}"'
     if dialog.get("img_file") and dialog.get("blip_caption"):
         turn += f' and shared {dialog["blip_caption"]}.'
     return f'({date_time_string}) {turn}'
 
-def build_bm25s_index_from_data(conversation: dict, method: str = "lucene", use_english_stopwords: bool = True, use_stemmer: bool = False):
+
+def build_bm25s_index_from_data(conversation: dict, method: str = "lucene", mode: str = "dialog",
+                                use_english_stopwords: bool = True, use_stemmer: bool = False):
     doc_texts, doc_ids = [], []
     session_nums = [int(k.split('_')[-1]) for k in conversation.keys()
                     if k.startswith('session_') and not k.endswith('_date_time')]
     for i in sorted(session_nums):
         dt = conversation.get(f'session_{i}_date_time', '')
-        for dialog in conversation.get(f'session_{i}', []):
-            t = _turn_text(dialog, dt)
-            doc_texts.append(t)
-            doc_ids.append(dialog.get("dia_id", ""))
+        # for dialog in conversation.get(f'session_{i}', []):
+        #     t = _turn_text(dialog, dt)
+        #     doc_texts.append(t)
+        #     doc_ids.append(dialog.get("dia_id", ""))
+
+        if mode == "dialog":
+            for dialog in conversation.get(f'session_{i}', []):
+                t = _turn_text(dialog, dt)
+                doc_texts.append(t)
+                doc_ids.append(dialog.get("dia_id", ""))
+
+        elif mode == "summary":
+            # 假设对话里有每个 session 的摘要字段（若没有就跳过/自行填充）
+            summ = conversation.get(f'session_{i}_summary')
+            if summ:
+                doc_texts.append(f"({dt}) {summ}")
+            doc_ids.append(f"session_{i}")
+
+        elif mode == "observation":
+            # 若数据里有 observation 列表，按需拼接
+            for obs in conversation.get(f'session_{i}_observations', []):
+                doc_texts.append(f"({dt}) {obs}")
+            doc_ids.append(f"obs_{i}_{len(doc_ids)}")
 
     stemmer = None
     if use_stemmer:
@@ -41,9 +64,10 @@ def build_bm25s_index_from_data(conversation: dict, method: str = "lucene", use_
     stopwords = "en" if use_english_stopwords else []
     corpus_tokens = bm25s.tokenize(doc_texts, stopwords=stopwords, stemmer=stemmer)
 
-    retriever = bm25s.BM25(method=method)   # defaults to Lucene variant
-    retriever.index(corpus_tokens)          # build sparse index
+    retriever = bm25s.BM25(method=method)  # defaults to Lucene variant
+    retriever.index(corpus_tokens)  # build sparse index
     return retriever, doc_texts, doc_ids
+
 
 def bm25s_retrieve_topk(retriever, query: str, doc_texts, doc_ids, top_k: int,
                         use_english_stopwords: bool = True, use_stemmer: bool = False):
@@ -61,8 +85,6 @@ def bm25s_retrieve_topk(retriever, query: str, doc_texts, doc_ids, top_k: int,
 
 
 def save_eval(data_file, accs, key='exact_match'):
-
-    
     if os.path.exists(data_file.replace('.json', '_scores.json')):
         data = json.load(open(data_file.replace('.json', '_scores.json')))
     else:
@@ -71,7 +93,7 @@ def save_eval(data_file, accs, key='exact_match'):
     assert len(data['qa']) == len(accs), (len(data['qa']), len(accs), accs)
     for i in range(0, len(data['qa'])):
         data['qa'][i][key] = accs[i]
-    
+
     with open(data_file.replace('.json', '_scores.json'), 'w') as f:
         json.dump(data, f, indent=2)
 
@@ -84,9 +106,9 @@ def mean_pooling(token_embeddings, mask):
 
 
 def init_context_model(retriever):
-
     if retriever == 'dpr':
-        from transformers import DPRConfig, DPRContextEncoder, DPRQuestionEncoder, DPRQuestionEncoderTokenizer, DPRContextEncoderTokenizer
+        from transformers import DPRConfig, DPRContextEncoder, DPRQuestionEncoder, DPRQuestionEncoderTokenizer, \
+            DPRContextEncoderTokenizer
         context_tokenizer = DPRContextEncoderTokenizer.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base")
         context_model = DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base").cuda()
         context_model.eval()
@@ -114,14 +136,15 @@ def init_context_model(retriever):
 
     elif retriever.lower() in ['bm25', 'bm25s']:
         return None, None
-    
+
     else:
         raise ValueError
-    
-def init_query_model(retriever):
 
+
+def init_query_model(retriever):
     if retriever == 'dpr':
-        from transformers import DPRConfig, DPRContextEncoder, DPRQuestionEncoder, DPRQuestionEncoderTokenizer, DPRContextEncoderTokenizer
+        from transformers import DPRConfig, DPRContextEncoder, DPRQuestionEncoder, DPRQuestionEncoderTokenizer, \
+            DPRContextEncoderTokenizer
         question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
         question_model = DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base").cuda()
         question_model.eval()
@@ -150,18 +173,17 @@ def init_query_model(retriever):
 
     elif retriever.lower() in ['bm25', 'bm25s']:
         return None, None
-    
+
     else:
         raise ValueError
 
 
 def get_embeddings(retriever, inputs, mode='context'):
-
     if mode == 'context':
         tokenizer, encoder = init_context_model(retriever)
     else:
         tokenizer, encoder = init_query_model(retriever)
-    
+
     all_embeddings = []
     batch_size = 24
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -169,20 +191,21 @@ def get_embeddings(retriever, inputs, mode='context'):
         for i in tqdm(range(0, len(inputs), batch_size)):
             # print(input_ids.shape)
             if retriever == 'dpr':
-                input_ids = tokenizer(inputs[i:(i+batch_size)], return_tensors="pt", padding=True)["input_ids"].cuda()
+                input_ids = tokenizer(inputs[i:(i + batch_size)], return_tensors="pt", padding=True)["input_ids"].cuda()
                 embeddings = encoder(input_ids).pooler_output.detach()
                 # print(embeddings.shape)
                 all_embeddings.append(torch.nn.functional.normalize(embeddings, dim=-1))
             elif retriever == 'contriever':
                 # Compute token embeddings
-                ctx_input = tokenizer(inputs[i:(i+batch_size)], padding=True, truncation=True, return_tensors='pt')
+                ctx_input = tokenizer(inputs[i:(i + batch_size)], padding=True, truncation=True, return_tensors='pt')
                 # print(ctx_input.keys())
                 # input_ids = context_tokenizer(contexts, return_tensors="pt", padding=True)["input_ids"].cuda()
                 outputs = encoder(**ctx_input)
                 embeddings = mean_pooling(outputs[0], inputs['attention_mask'])
                 all_embeddings.append(torch.nn.functional.normalize(embeddings, dim=-1))
             elif retriever == 'dragon':
-                ctx_input = tokenizer(inputs[i:(i+batch_size)], padding=True, truncation=True, return_tensors='pt').to(device)
+                ctx_input = tokenizer(inputs[i:(i + batch_size)], padding=True, truncation=True,
+                                      return_tensors='pt').to(device)
                 embeddings = encoder(**ctx_input).last_hidden_state[:, 0, :]
                 # all_embeddings.append(torch.nn.functional.normalize(embeddings, dim=-1))
                 all_embeddings.append(embeddings)
@@ -195,10 +218,9 @@ def get_embeddings(retriever, inputs, mode='context'):
 
 
 def get_context_embeddings(retriever, data, context_tokenizer, context_encoder, captions=None):
-
     context_embeddings = []
     context_ids = []
-    for i in tqdm(range(1,20), desc="Getting context encodings"):
+    for i in tqdm(range(1, 20), desc="Getting context encodings"):
         contexts = []
         if 'session_%s' % i in data:
             date_time_string = data['session_%s_date_time' % i]
