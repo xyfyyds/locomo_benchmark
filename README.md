@@ -89,7 +89,7 @@ python3 task_eval/evaluate_qa.py \
 * Evaluate local models sing RAG bm25
 ```
 python3 task_eval/evaluate_qa.py \
-    --data-file ./data/locomo10.json --out-file ./outputs/locomo10_qa.json \
+    --data-file ./data/locomo10.json --out-file ./outputs/locomo10_qa_rag.json \
     --model ../models/Qwen/Qwen2.5-3B-Instruct --batch-size 1 \
     --use-rag --retriever bm25s  --top-k 5 --rag-mode dialog
 ```
